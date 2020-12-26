@@ -14,10 +14,12 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 	{{range .Imports}}{{.UniqueName}} "{{.Path}}"
@@ -259,20 +261,22 @@ Options:
 	var ctxCancel func()
 
 	getContext := func() (context.Context, func()) {
-		if ctx != nil {
-			return ctx, ctxCancel
+		if ctx == nil {
+			ctx, ctxCancel = context.WithCancel(context.Background())
 		}
 
-		if args.Timeout != 0 {
-			ctx, ctxCancel = context.WithTimeout(context.Background(), args.Timeout)
-		} else {
-			ctx = context.Background()
-			ctxCancel = func() {}
-		}
 		return ctx, ctxCancel
 	}
 
-	runTarget := func(fn func(context.Context) error) interface{} {
+	getTimeout := func() <-chan time.Time {
+		if args.Timeout != 0 {
+			return time.After(args.Timeout)
+		}
+
+		return make(chan time.Time)
+	}
+
+	runTarget := func(logger *log.Logger, fn func(context.Context) error) interface{} {
 		var err interface{}
 		ctx, cancel := getContext()
 		d := make(chan interface{})
@@ -284,15 +288,35 @@ Options:
 			err := fn(ctx)
 			d <- err
 		}()
-		select {
-		case <-ctx.Done():
-			cancel()
-			e := ctx.Err()
-			fmt.Printf("ctx err: %v\n", e)
-			return e
-		case err = <-d:
-			cancel()
-			return err
+		timeoutCh := getTimeout()
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT)
+		for {
+			select {
+			case <-sigCh:
+				logger.Println("cancelling mage targets, waiting up to 5 seconds for cleanup...")
+				cancel()
+				cleanupCh := time.After(5 * time.Second)
+
+				select {
+				// target exited by itself
+				case err = <-d:
+					return err
+				// cleanup timeout exceeded
+				case <-cleanupCh:
+					return fmt.Errorf("cleanup timeout exceeded")
+				// second SIGINT received
+				case <-sigCh:
+					logger.Println("exiting mage")
+					return fmt.Errorf("exit forced")
+				}
+			case <-timeoutCh:
+				cancel()
+				return fmt.Errorf("context deadline exceeded")
+			case err = <-d:
+				cancel()
+				return err
+			}
 		}
 	}
 	// This is necessary in case there aren't any targets, to avoid an unused
