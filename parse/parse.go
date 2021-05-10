@@ -168,6 +168,7 @@ func PrimaryPackage(gocmd, path string, files []string) (*PkgInfo, error) {
 	}
 
 	setDefault(info)
+	setDeinit(info)
 	setAliases(info)
 	return info, nil
 }
