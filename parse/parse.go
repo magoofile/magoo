@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -549,8 +550,19 @@ func setDeinit(pi *PkgInfo) {
 				return
 			}
 			pi.DeinitFunc = f
+			removeDeinitFuncFromTargets(pi)
 			return
 		}
+	}
+}
+
+func removeDeinitFuncFromTargets(pi *PkgInfo) {
+	for i, f := range pi.Funcs {
+		if !reflect.DeepEqual(f, pi.DeinitFunc) {
+			continue
+		}
+		pi.Funcs = append(pi.Funcs[:i], pi.Funcs[i+1:]...)
+		return
 	}
 }
 
