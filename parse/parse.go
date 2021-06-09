@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -33,8 +34,10 @@ type PkgInfo struct {
 	Description string
 	Funcs       []*Function
 	DefaultFunc *Function
-	Aliases     map[string]*Function
-	Imports     []*Import
+	// DeinitFunc runs any clean up tasks on shutdown
+	DeinitFunc *Function
+	Aliases    map[string]*Function
+	Imports    []*Import
 }
 
 // Function represented a job function from a mage file
@@ -166,6 +169,7 @@ func PrimaryPackage(gocmd, path string, files []string) (*PkgInfo, error) {
 	}
 
 	setDefault(info)
+	setDeinit(info)
 	setAliases(info)
 	return info, nil
 }
@@ -526,6 +530,39 @@ func setDefault(pi *PkgInfo) {
 			pi.DefaultFunc = f
 			return
 		}
+	}
+}
+
+func setDeinit(pi *PkgInfo) {
+	for _, v := range pi.DocPkg.Vars {
+		for x, name := range v.Names {
+			if name != "Deinit" {
+				continue
+			}
+			spec := v.Decl.Specs[x].(*ast.ValueSpec)
+			if len(spec.Values) != 1 {
+				log.Println("warning: deinit declaration has multiple values")
+			}
+
+			f, err := getFunction(spec.Values[0], pi)
+			if err != nil {
+				log.Println("warning, deinit declaration malformed:", err)
+				return
+			}
+			pi.DeinitFunc = f
+			removeDeinitFuncFromTargets(pi)
+			return
+		}
+	}
+}
+
+func removeDeinitFuncFromTargets(pi *PkgInfo) {
+	for i, f := range pi.Funcs {
+		if !reflect.DeepEqual(f, pi.DeinitFunc) {
+			continue
+		}
+		pi.Funcs = append(pi.Funcs[:i], pi.Funcs[i+1:]...)
+		return
 	}
 }
 
